@@ -287,7 +287,7 @@ func _initiate_create_session(p_emit_error := true) -> bool:
 		_terminate_session()
 		if p_emit_error:
 			_raise_error(SessionError.CREATE_SESSION_FAILED, "Session creation failed, cannot create multiplayer peer server: {error}".format({
-			"error": error_string(error),
+				"error": error_string(error),
 			}))
 		return false
 
@@ -332,7 +332,7 @@ func _initiate_join_session(p_session_id: String, p_emit_error := true) -> bool:
 		_session_initiated.emit()
 		if p_emit_error:
 			_raise_error(SessionError.JOIN_SESSION_FAILED, "Joining session failed, session id invalid '{id}'".format({
-			"id": p_session_id,
+				"id": p_session_id,
 			}))
 		return false
 
@@ -346,7 +346,7 @@ func _initiate_join_session(p_session_id: String, p_emit_error := true) -> bool:
 		_terminate_session()
 		if p_emit_error:
 			_raise_error(SessionError.JOIN_SESSION_FAILED, "Joining session failed, cannot create multiplayer peer client: {error}".format({
-			"error": error_string(error),
+				"error": error_string(error),
 			}))
 		return false
 
@@ -354,6 +354,8 @@ func _initiate_join_session(p_session_id: String, p_emit_error := true) -> bool:
 
 	var peer := _initiate_peer(_SERVER_PEER_ID)
 	if not peer.valid:
+		if State.IDLE != state:
+			_terminate_session()
 		return false
 
 	_initiate_local_signaling()
@@ -379,6 +381,9 @@ func _terminate_signaling():
 
 
 func _terminate_session():
+	var was_creating := State.CREATING_SESSION == state or State.TRY_CREATING_SESSION == state
+	var was_joining := State.JOINING_SESSION == state or State.TRY_JOINING_SESSION == state
+	
 	state = State.IDLE
 
 	if null != _local_signaling_peer:
@@ -397,6 +402,11 @@ func _terminate_session():
 	session_id = ""
 	multiplayer_peer.close()
 	multiplayer_api.multiplayer_peer = OfflineMultiplayerPeer.new()
+	
+	if was_creating:
+		_session_create_finished.emit(false)
+	if was_joining:
+		_session_join_finished.emit(false)
 
 
 func _is_local_signaling() -> bool:
@@ -478,7 +488,6 @@ func _on_tracker_connected(p_tracker: TubeTracker):
 func _all_trackers_disconnected(): # is_online_signaling false
 	if State.TRY_CREATING_SESSION == state:
 		_terminate_session()
-		_session_create_finished.emit(false)
 	elif State.CREATING_SESSION == state:
 		if _is_local_signaling():
 			_raise_error(
@@ -510,7 +519,6 @@ func _all_trackers_disconnected(): # is_online_signaling false
 		if _peers.has(_SERVER_PEER_ID):
 			var peer = _peers[_SERVER_PEER_ID]
 			if peer.remote_session_description.is_empty():
-				_session_join_finished.emit(false)
 				if State.JOINING_SESSION == state:
 					_raise_error(
 						SessionError.JOIN_SESSION_FAILED,
@@ -791,9 +799,6 @@ func _on_peer_failed(p_peer: TubePeer):
 		return
 	
 	if not is_server:
-		if State.JOINING_SESSION == state or State.TRY_JOINING_SESSION == state:
-			_session_join_finished.emit(false)
-		
 		if State.JOINING_SESSION == state:
 			_raise_error(
 				SessionError.JOIN_SESSION_FAILED,
