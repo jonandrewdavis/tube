@@ -12,7 +12,9 @@ const MESSAGE_ITEM_CONTROL_SCENE := preload("uid://cfsei3airwx4s")
 const STATE_COLORS := {
 	TubeClient.State.IDLE: Color.BEIGE,
 	TubeClient.State.CREATING_SESSION: Color.CYAN,
+	TubeClient.State.TRY_CREATING_SESSION: Color.CYAN,
 	TubeClient.State.JOINING_SESSION: Color.CYAN,
+	TubeClient.State.TRY_JOINING_SESSION: Color.CYAN,
 	TubeClient.State.SESSION_CREATED: Color.PALE_GREEN,
 	TubeClient.State.SESSION_JOINED: Color.PALE_GREEN,
 }
@@ -335,10 +337,10 @@ func _on_client_error_raised(code: int, message: String):
 func _on_client_session_initiated():
 	clear()
 	match client.state:
-		TubeClient.State.JOINING_SESSION:
+		TubeClient.State.JOINING_SESSION, TubeClient.State.TRY_JOINING_SESSION:
 			switch_to_joined_config()
 		
-		TubeClient.State.CREATING_SESSION:
+		TubeClient.State.CREATING_SESSION, TubeClient.State.TRY_CREATING_SESSION:
 			switch_to_created_config()
 		
 		TubeClient.State.IDLE:

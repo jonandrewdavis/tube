@@ -31,7 +31,7 @@ var client: TubeClient:
 			app_id_label.text = client.context.app_id
 		
 		if is_instance_valid(root_node_label):
-			root_node_label.text = client.multiplayer_root_node.get_path()
+			root_node_label.text = client.multiplayer_root_node.get_path() if is_instance_valid(client.multiplayer_root_node) else NodePath()
 		
 		detect_nat()
 

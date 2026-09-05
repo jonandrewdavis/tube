@@ -36,6 +36,8 @@ const _APP_ID_CHARACTER_SET := "!#$%&()*+,-./ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi
 ## }
 @export var turn_servers: Array[Dictionary] = []
 
+## List of additional channels to configure on the connection between players.
+@export var channel_config: Array[MultiplayerPeer.TransferMode] = []
 
 func _to_string() -> String:
 	return "AppID: %s | Trackers: %s | STUN: %s" % [app_id, str(trackers_urls), str(stun_servers_urls)]

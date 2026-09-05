@@ -4,9 +4,9 @@ class_name TubeClient extends Node
 ##
 ## One player creates a session and shares the session ID with others. The other players can then join and play together. That’s it, no server deployment needed.
 ## [br][br]
-## This class will set up all the High-level multiplayer api for [member multiplayer_root_node] Node.
+## This class will set up the high-level multiplayer api for [member multiplayer_root_node] Node.
 ## [br][br]
-## [b]Note[/b]: It uses WebRTC for peer connections, as it, it works automatically in HTML5, but require an external GDExtension plugin on other non-HTML5 platforms. Check out the [url=https://github.com/godotengine/webrtc-native/releases]webrtc-native plugin repository[/url] for instructions. No specific error message will appear if WebRTC implementation is missing.
+## [b]Note[/b]: Tube uses WebRTC, it works automatically on HTML5 exports, but requires an external GDExtension plugin on other platforms. You can find everything you need in the [url=https://github.com/godotengine/webrtc-native/releases]webrtc-native plugin repository[/url]. No specific error message will appear if WebRTC implementation is missing.
 ## [br][br]
 ## When exporting to Android, make sure to enable the [code]INTERNET[/code] permission in the Android export preset before exporting the project or using one-click deploy. Otherwise, network communication of any kind will be blocked by Android.
 ##
@@ -58,6 +58,8 @@ signal _session_initiated
 signal _local_signaling_peer_initiated(signaling_peer: TubeLocalSignalingPeer)
 signal _tracker_initiated(tracker: TubeTracker)
 signal _peer_initiated(peer: TubePeer)
+signal _session_join_finished(success: bool)
+signal _session_create_finished(success: bool)
 
 
 enum State {
@@ -67,11 +69,17 @@ enum State {
 	## Attempting to create a session.
 	CREATING_SESSION, 
 	
+	## Attempting to create a session, without [signal error_raised] on failure.
+	TRY_CREATING_SESSION, 
+	
 	## The session has been successfully created. Waiting for other player to join.
 	SESSION_CREATED, 
 	
 	## Attempting to join a session.
 	JOINING_SESSION, 
+	
+	## Attempting to join a session, without [signal error_raised] on failure.
+	TRY_JOINING_SESSION, 
 	
 	## A session has been successfully joined. Connected to server.
 	SESSION_JOINED, 
@@ -184,103 +192,42 @@ func _ready() -> void:
 
 ## Creates a new multiplayer session.
 ## Emits [signal session_created] if successful, or [signal error_raised] with [code]SessionError.CREATE_SESSION_FAILED[/code] if failed.
+## See [method TubeClient.try_create_session].
 func create_session() -> void:
-	if not is_inside_tree():
-		_session_initiated.emit()
-		_raise_error(SessionError.CREATE_SESSION_FAILED, "Session creation failed, client is not inside tree")
-		return
-	
-	if State.IDLE != state:
-		_session_initiated.emit()
-		_raise_error(SessionError.CREATE_SESSION_FAILED, "Session creation failed, not in idle state")
-		return
-	
-	if null == context:
-		_session_initiated.emit()
-		_raise_error(SessionError.CREATE_SESSION_FAILED, "Session creation failed, context is missing")
-		return
-	
-	if not context.is_valid():
-		_session_initiated.emit()
-		_raise_error(SessionError.CREATE_SESSION_FAILED, "Session creation failed, context is invalid")
-		return
-	
-	state = State.CREATING_SESSION
-	session_id = context.generate_session_id()
-	peer_id = _SERVER_PEER_ID
-	refuse_new_connections = false
-	_session_initiated.emit()
-	
-	var error := multiplayer_peer.create_server()
-	if error:
-		_terminate_session()
-		_raise_error(SessionError.CREATE_SESSION_FAILED, "Session creation failed, cannot create mutiplayer peer server: {error}".format({
-			"error": error_string(error),
-		}))
-		return
-	
-	multiplayer_api.multiplayer_peer = multiplayer_peer
-	
-	_initiate_local_signaling()
-	for url in context.trackers_urls:
-		_initiate_tracker(url)
-	
-	if _is_local_signaling() and not _is_online_signaling():
-		state = State.SESSION_CREATED
-		session_created.emit()
+	_initiate_create_session()
 
-## Attempts to join a active session [param p_session_id] created by a server.
+## Creates a new multiplayer session.
+## This method is a coroutine and requires the use of the [code]await[/code] keyword to get the returned value.
+## Returns [code]true[/code] if successful, or [code]false[/code] if failed.
+## Emits [signal session_created] if successful, but will [b]not[/b] emit [signal error_raised] if failed.
+## See [method TubeClient.create_session].
+func try_create_session() -> bool:
+	if not _initiate_create_session(false):
+		return false
+	
+	# Check if local signaling connection established
+	if state == State.SESSION_CREATED:
+		return true
+	
+	return await _session_create_finished
+
+## Attempts to join an active session [param p_session_id] created by a server.
 ## Emits [signal session_joined] if successful, or [signal error_raised] with [code]SessionError.JOIN_SESSION_FAILED[/code] if failed.
+## See [method TubeClient.try_join_session].
 func join_session(p_session_id: String) -> void:
-	if not is_inside_tree():
-		_session_initiated.emit()
-		_raise_error(SessionError.JOIN_SESSION_FAILED, "Joining session failed, client is not inside tree")
-		return
+	_initiate_join_session(p_session_id)
+
+
+## Attempts to join an active session [param p_session_id] created by a server.
+## This method is a coroutine and requires the use of the [code]await[/code] keyword to get the returned value.
+## Returns [code]true[/code] if successful, or [code]false[/code] if failed.
+## Emits [signal session_joined] if successful, but will [b]not[/b] emit [signal error_raised] if failed.
+## See [method TubeClient.join_session].
+func try_join_session(p_session_id: String) -> bool:
+	if not _initiate_join_session(p_session_id, false):
+		return false
 	
-	if State.IDLE != state:
-		_session_initiated.emit()
-		_raise_error(SessionError.JOIN_SESSION_FAILED, "Joining session failed, not in idle state")
-		return
-	
-	if null == context:
-		_session_initiated.emit()
-		_raise_error(SessionError.JOIN_SESSION_FAILED, "Joining session failed, context is missing")
-		return
-	
-	if not context.is_valid():
-		_session_initiated.emit()
-		_raise_error(SessionError.JOIN_SESSION_FAILED, "Joining session failed, context is invalid")
-		return
-	
-	if not context.is_session_id_valid(p_session_id):
-		_session_initiated.emit()
-		_raise_error(SessionError.JOIN_SESSION_FAILED, "Joining session failed, session id invalid '{id}'".format({
-			"id": p_session_id,
-		}))
-		return
-	
-	state = State.JOINING_SESSION
-	session_id = p_session_id
-	peer_id = multiplayer_peer.generate_unique_id()
-	_session_initiated.emit()
-	
-	var error := multiplayer_peer.create_client(peer_id)
-	if error:
-		_terminate_session()
-		_raise_error(SessionError.JOIN_SESSION_FAILED, "Joining session failed, cannot create mutiplayer peer client: {error}".format({
-			"error": error_string(error),
-		}))
-		return
-	
-	multiplayer_api.multiplayer_peer = multiplayer_peer
-	
-	var peer := _initiate_peer(_SERVER_PEER_ID)
-	if not peer.valid:
-		return
-	
-	_initiate_local_signaling()
-	for url in context.trackers_urls:
-		_initiate_tracker(url)
+	return await _session_join_finished
 
 ## Attempts to remove a peer [param p_peer_id from the session. 
 ## Emits [signal peer_disconnected] if successful [signal error_raised] with [code]SessionError.KICK_PEER_FAILED[/code] if the operation fails.
@@ -298,10 +245,122 @@ func kick_peer(p_peer_id: int) -> void:
 	multiplayer_peer.disconnect_peer(p_peer_id)
 
 
-## Leaves the current session. Will close the session for all other client if called by server.
+## Leaves the current session. Will close the session for all other clients if called by server.
 func leave_session() -> void:
 	session_left.emit()
 	_terminate_session()
+
+
+func _initiate_create_session(p_emit_error := true) -> bool:
+	if not is_inside_tree():
+		_session_initiated.emit()
+		if p_emit_error:
+			_raise_error(SessionError.CREATE_SESSION_FAILED, "Session creation failed, client is not inside tree")
+		return false
+
+	if State.IDLE != state:
+		_session_initiated.emit()
+		if p_emit_error:
+			_raise_error(SessionError.CREATE_SESSION_FAILED, "Session creation failed, not in idle state")
+		return false
+
+	if null == context:
+		_session_initiated.emit()
+		if p_emit_error:
+			_raise_error(SessionError.CREATE_SESSION_FAILED, "Session creation failed, context is missing")
+		return false
+
+	if not context.is_valid():
+		_session_initiated.emit()
+		if p_emit_error:
+			_raise_error(SessionError.CREATE_SESSION_FAILED, "Session creation failed, context is invalid")
+		return false
+
+	state = State.CREATING_SESSION if p_emit_error else State.TRY_CREATING_SESSION
+	session_id = context.generate_session_id()
+	peer_id = _SERVER_PEER_ID
+	refuse_new_connections = false
+	_session_initiated.emit()
+
+	var error := multiplayer_peer.create_server(context.channel_config)
+	if error:
+		_terminate_session()
+		if p_emit_error:
+			_raise_error(SessionError.CREATE_SESSION_FAILED, "Session creation failed, cannot create multiplayer peer server: {error}".format({
+			"error": error_string(error),
+			}))
+		return false
+
+	multiplayer_api.multiplayer_peer = multiplayer_peer
+
+	_initiate_local_signaling()
+	for url in context.trackers_urls:
+		_initiate_tracker(url)
+
+	if _is_local_signaling() and not _is_online_signaling():
+		state = State.SESSION_CREATED
+		session_created.emit()
+	return true
+
+
+func _initiate_join_session(p_session_id: String, p_emit_error := true) -> bool:
+	if not is_inside_tree():
+		_session_initiated.emit()
+		if p_emit_error:
+			_raise_error(SessionError.JOIN_SESSION_FAILED, "Joining session failed, client is not inside tree")
+		return false
+
+	if State.IDLE != state:
+		_session_initiated.emit()
+		if p_emit_error:
+			_raise_error(SessionError.JOIN_SESSION_FAILED, "Joining session failed, not in idle state")
+		return false
+
+	if null == context:
+		_session_initiated.emit()
+		if p_emit_error:
+			_raise_error(SessionError.JOIN_SESSION_FAILED, "Joining session failed, context is missing")
+		return false
+
+	if not context.is_valid():
+		_session_initiated.emit()
+		if p_emit_error:
+			_raise_error(SessionError.JOIN_SESSION_FAILED, "Joining session failed, context is invalid")
+		return false
+
+	if not context.is_session_id_valid(p_session_id):
+		_session_initiated.emit()
+		if p_emit_error:
+			_raise_error(SessionError.JOIN_SESSION_FAILED, "Joining session failed, session id invalid '{id}'".format({
+			"id": p_session_id,
+			}))
+		return false
+
+	state = State.JOINING_SESSION if p_emit_error else State.TRY_JOINING_SESSION
+	session_id = p_session_id
+	peer_id = multiplayer_peer.generate_unique_id()
+	_session_initiated.emit()
+
+	var error := multiplayer_peer.create_client(peer_id, context.channel_config)
+	if error:
+		_terminate_session()
+		if p_emit_error:
+			_raise_error(SessionError.JOIN_SESSION_FAILED, "Joining session failed, cannot create multiplayer peer client: {error}".format({
+			"error": error_string(error),
+			}))
+		return false
+
+	multiplayer_api.multiplayer_peer = multiplayer_peer
+
+	var peer := _initiate_peer(_SERVER_PEER_ID)
+	if not peer.valid:
+		return false
+
+	_initiate_local_signaling()
+	for url in context.trackers_urls:
+		_initiate_tracker(url)
+	
+	return true
 
 
 # SIGNALING ###
@@ -337,6 +396,7 @@ func _terminate_session():
 	
 	session_id = ""
 	multiplayer_peer.close()
+	multiplayer_api.multiplayer_peer = OfflineMultiplayerPeer.new()
 
 
 func _is_local_signaling() -> bool:
@@ -399,8 +459,9 @@ func _on_tracker_connected(p_tracker: TubeTracker):
 		context.get_peer_id_hash(peer_id),
 	)
 	
-	if State.CREATING_SESSION == state:
+	if State.CREATING_SESSION == state or State.TRY_CREATING_SESSION == state:
 		state = State.SESSION_CREATED
+		_session_create_finished.emit(true)
 		session_created.emit()
 	
 	if is_server:
@@ -415,7 +476,10 @@ func _on_tracker_connected(p_tracker: TubeTracker):
 
 
 func _all_trackers_disconnected(): # is_online_signaling false
-	if State.CREATING_SESSION == state:
+	if State.TRY_CREATING_SESSION == state:
+		_terminate_session()
+		_session_create_finished.emit(false)
+	elif State.CREATING_SESSION == state:
 		if _is_local_signaling():
 			_raise_error(
 				SessionError.ONLINE_SIGNALING_FAILED,
@@ -442,14 +506,16 @@ func _all_trackers_disconnected(): # is_online_signaling false
 			)
 		
 	
-	elif State.JOINING_SESSION == state:
+	elif State.JOINING_SESSION == state or State.TRY_JOINING_SESSION == state:
 		if _peers.has(_SERVER_PEER_ID):
 			var peer = _peers[_SERVER_PEER_ID]
 			if peer.remote_session_description.is_empty():
-				_raise_error(
-					SessionError.JOIN_SESSION_FAILED,
-					"Joining session failed, cannot connect to any tracker"
-				)
+				_session_join_finished.emit(false)
+				if State.JOINING_SESSION == state:
+					_raise_error(
+						SessionError.JOIN_SESSION_FAILED,
+						"Joining session failed, cannot connect to any tracker"
+					)
 				_terminate_session()
 
 
@@ -699,9 +765,10 @@ func _on_peer_connected(p_peer: TubePeer):
 		_clean_peer(p_peer)
 		return
 	
-	if State.JOINING_SESSION == state:
+	if State.JOINING_SESSION == state or State.TRY_JOINING_SESSION == state:
 		state = State.SESSION_JOINED
 		_terminate_signaling()
+		_session_join_finished.emit(true)
 		session_joined.emit()
 	
 	if p_peer.has_joined_session:
@@ -724,6 +791,9 @@ func _on_peer_failed(p_peer: TubePeer):
 		return
 	
 	if not is_server:
+		if State.JOINING_SESSION == state or State.TRY_JOINING_SESSION == state:
+			_session_join_finished.emit(false)
+		
 		if State.JOINING_SESSION == state:
 			_raise_error(
 				SessionError.JOIN_SESSION_FAILED,
