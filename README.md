@@ -31,8 +31,8 @@ Tube was developed and tested with Godot 4.5, and it may also work with other Go
 ### Requirements
 
 **Tube** uses WebRTC, it works automatically on HTML5 exports, but requires an external GDExtension plugin on other platforms. You can find everything you need in the [webrtc-native plugin repository](https://github.com/godotengine/webrtc-native/releases).
-> [!WARNING]
-> No **specific** error message on Desktop platforms will appear if WebRTC implementation is missing. Make sure it’s set up correctly!
+> [!NOTE]
+> If the WebRTC implementation is missing on Desktop platforms, `create_session` will fail with `error_raised`, and `TubeClient.is_webrtc_available()` returns `false`.
 
 When exporting to Android, make sure to enable the `INTERNET` and `CHANGE_WIFI_MULTICAST_STATE` permission in the Android export preset before exporting the project or using one-click deploy. Otherwise, network communication of any kind will be blocked by Android.
 

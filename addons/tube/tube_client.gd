@@ -165,6 +165,13 @@ var _trackers: Array[TubeTracker] = []
 var _peers: Dictionary[int, TubePeer] = {}
 
 
+static func is_webrtc_available() -> bool:
+	if OS.has_feature("web"):
+		return true
+	
+	return WebRTCPeerConnection.new().get_class() != "WebRTCPeerConnectionExtension"
+
+
 func _raise_error(p_code: int, p_message: String):
 	printerr(p_message)
 	error_raised.emit(p_code, p_message)
@@ -274,6 +281,12 @@ func _initiate_create_session(p_emit_error := true) -> bool:
 		_session_initiated.emit()
 		if p_emit_error:
 			_raise_error(SessionError.CREATE_SESSION_FAILED, "Session creation failed, context is invalid")
+		return false
+
+	if not is_webrtc_available():
+		_session_initiated.emit()
+		if p_emit_error:
+			_raise_error(SessionError.CREATE_SESSION_FAILED, "Session creation failed, WebRTC implementation missing, install the webrtc-native GDExtension")
 		return false
 
 	state = State.CREATING_SESSION if p_emit_error else State.TRY_CREATING_SESSION
@@ -702,13 +715,6 @@ func _initiate_peer(p_peer_id: int) -> TubePeer:
 	var peer := TubePeer.new(p_peer_id)
 	peer.signaling_timeout_time = peer_signaling_timeout
 	peer.signaling_max_attempts = peer_signaling_max_attempts
-	var error := peer.initialize(
-		context.get_ice_servers()
-	)
-	
-	if error: # error raised with peer.failed
-		return peer
-	
 	
 	peer.signaling_readied.connect(
 		_on_peer_signaling_readied.bind(peer)
@@ -728,6 +734,12 @@ func _initiate_peer(p_peer_id: int) -> TubePeer:
 	peer.closed.connect(
 		_on_peer_closed.bind(peer)
 	)
+	
+	var error := peer.initialize(
+		context.get_ice_servers()
+	)
+	if error: # error raised with peer.failed
+		return peer
 
 	_peers[p_peer_id] = peer
 	_peer_initiated.emit(peer)
@@ -738,6 +750,7 @@ func _initiate_peer(p_peer_id: int) -> TubePeer:
 			"error": error_string(error)
 		})
 		peer.failed.emit()
+		return peer
 	
 	if not is_server:
 		error = peer.create_offer()
