@@ -24,6 +24,9 @@ const _APP_ID_CHARACTER_SET := "!#$%&()*+,-./ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi
 ## List of tracker server URLs used for session signaling.
 @export var trackers_urls: Array[String] = []
 
+## Optional MQTT WebSocket URL, used alongside tracker URLs.
+@export var mqtt_broker_url: String = ""
+
 ## List of STUN server URLs used for WebRTC ICE candidate resolution.
 @export var stun_servers_urls: Array[String] = []
 
@@ -40,6 +43,8 @@ const _APP_ID_CHARACTER_SET := "!#$%&()*+,-./ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi
 @export var channel_config: Array[MultiplayerPeer.TransferMode] = []
 
 func _to_string() -> String:
+	if not mqtt_broker_url.is_empty():
+		return "AppID: %s | Trackers: %s | MQTT: %s | STUN: %s" % [app_id, str(trackers_urls), mqtt_broker_url, str(stun_servers_urls)]
 	return "AppID: %s | Trackers: %s | STUN: %s" % [app_id, str(trackers_urls), str(stun_servers_urls)]
 
 

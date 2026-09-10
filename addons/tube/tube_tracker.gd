@@ -2,8 +2,7 @@ class_name TubeTracker extends RefCounted
 
 
 const MAX_INTERVAL := 120.0 #sec
-
-
+const CONNECT_TIMEOUT := 10.0 #sec
 signal failed
 signal connected
 signal disconnected
@@ -28,6 +27,7 @@ var error_message: String
 var socket := WebSocketPeer.new()
 var state := socket.get_ready_state()
 
+var connect_timeout: float = CONNECT_TIMEOUT #sec
 var connecting_time: float = 0.0 #sec
 var up_time: float = 0.0 #sec
 var interval_time: float = 0.0 #sec
@@ -99,12 +99,12 @@ func _socket_connection_closed(p_code: int, p_reason: String):
 	p_reason = p_reason if p_reason else "Closed unexpectedly, code: {code}".format({
 		"code": p_code,
 	})
-	
+
 	if WebSocketPeer.State.STATE_OPEN == state:
 		error_message = "connection failed: {reason}".format({
 			"reason": p_reason,
 		})
-	
+
 	disconnected.emit()
 
 
@@ -126,16 +126,16 @@ func send_data(p_data: Dictionary) -> Error:
 	var error := socket.send_text(
 		text
 	)
-	
+
 	if error:
 		raise_warning(
 			"Cannot send text: {error}".format({
 			"error": error_string(error)
 		}))
-	
+
 	else:
 		data_sent.emit(p_data)
-	
+
 	return error
 
 
@@ -144,7 +144,7 @@ func send_announce(p_info_hash: String, p_peer_id_hash: String) -> Error:
 		"action": "announce",
 		"info_hash": p_info_hash,
 		"peer_id": p_peer_id_hash,
-		
+
 		"uploaded": 0,
 		"downloaded": 0,
 	})
@@ -161,7 +161,7 @@ func send_answer(
 		"action": "announce",
 		"info_hash": p_info_hash,
 		"peer_id": p_peer_id_hash,
-		
+
 		"to_peer_id": p_to_peer_id_hash,
 		"answer": {
 			"type": description.type,
@@ -188,12 +188,12 @@ func _received_packet(p_packet: PackedByteArray):
 			"packet": str(p_packet)
 		}))
 		return
-	
+
 	received_data.emit(data)
 	if data.has("answer"):
 		_handle_answer(data)
 		return
-	
+
 	_handle_announce(data)
 
 
@@ -201,11 +201,11 @@ func _handle_announce(p_data: Dictionary):
 	if not p_data.has("interval"):
 		raise_warning("announce data has no interval")
 		return
-	
+
 	if not p_data.interval is float:
 		raise_warning("interval invalid data type")
 		return
-	
+
 	interval_time = min(p_data.interval, MAX_INTERVAL)
 	interval_time_left = interval_time
 
@@ -214,47 +214,47 @@ func _handle_answer(p_data: Dictionary):
 	if not p_data is Dictionary:
 		raise_warning("answer data invalid data type")
 		return
-	
+
 	if not p_data.has("peer_id"):
 		raise_warning("answer data has no peer_id")
 		return
-	
+
 	if not p_data.peer_id is String:
 		raise_warning("peer_id invalid data type")
 		return
-	
+
 	if not p_data.has("answer"):
 		raise_warning("answer data has no answer")
 		return
-	
+
 	if not p_data.answer is Dictionary:
 		raise_warning("answer invalid data type")
 		return
-	
+
 	var answer: Dictionary = p_data.answer
 	if not answer.has("sdp"):
 		raise_warning("answer data has no sdp")
-	
+
 	if not answer.sdp is String:
 		raise_warning("sdp invalid data type")
 		return
-	
+
 	if not answer.has("type"):
 		raise_warning("answer data has no type")
 		return
-	
+
 	if not answer.type is String:
 		raise_warning("type invalid data type")
 		return
-	
+
 	if not answer.has("ice_candidates"):
 		raise_warning("answer data has no ice_candidates")
 		return
-	
+
 	if not answer.ice_candidates is Array:
 		raise_warning("ice_candidates invalid data type")
 		return
-	
+
 	received_answer.emit(p_data)
 
 
@@ -278,31 +278,31 @@ static func is_ice_candidate_data_valid(p_data: Variant) -> bool:
 	if not p_data is Dictionary:
 		push_error("Ice candidate data invalid data type")
 		return false
-	
+
 	if not p_data.has("media"):
 		push_error("Ice candidate data has no media")
 		return false
-	
+
 	if not p_data.media is String:
 		push_error("media invalid data type")
 		return false
-	
+
 	if not p_data.has("index"):
 		push_error("Ice candidate has no index")
 		return false
-	
+
 	if not (typeof(p_data.index) in [TYPE_INT, TYPE_FLOAT]):
 		push_error("index invalid data type")
 		return false
-	
+
 	if not p_data.has("sdp"):
 		push_error("Ice candidate has no sdp")
 		return false
-	
+
 	if not p_data.sdp is String:
 		push_error("Ice candidate sdp invalid data type")
 		return false
-	
+
 	return true
 
 
@@ -320,42 +320,46 @@ static func get_sdp_from_ice_candidate_data(p_data: Dictionary) -> String:
 
 func _process(delta: float):
 	socket.poll() # push error when 502 bad gateway, doesn't block anything
-	
+
 	var old_state := state
 	state = socket.get_ready_state()
 	if state != old_state:
 		state_changed.emit()
-	
-	
+
+
 	if WebSocketPeer.STATE_CONNECTING == state:
 		connecting_time += delta
-	
+		if connecting_time >= connect_timeout:
+			error_message = "Tracker connection timed out"
+			failed.emit()
+			socket.close(CLOSE_CODE_FAILED, error_message)
+
 	if WebSocketPeer.STATE_OPEN == state:
 		if WebSocketPeer.STATE_OPEN != old_state:
 			_socket_connection_opened()
-		
+
 		while socket.get_available_packet_count():
 			var packet := socket.get_packet()
 			_received_packet(packet)
-		
+
 		up_time += delta
-		
+
 		if 0.0 < interval_time:
 			interval_time_left -= delta
 			if interval_time_left < 0.0:
 				interval_time_left = interval_time
 				interval_timeout.emit()
-	
-	
+
+
 	elif WebSocketPeer.STATE_CLOSING == state:
 		# Keep polling to achieve proper close.
 		pass
-	
+
 	elif WebSocketPeer.STATE_CLOSED == state:
 		var code = socket.get_close_code()
 		var reason = socket.get_close_reason()
 		_socket_connection_closed(code, reason)
-	
+
 	#
 	#if WebRTCPeerConnection.STATE_CONNECTED == connection_state:
 			#
