@@ -106,7 +106,7 @@ func update():
 	if is_instance_valid(tracker):
 	
 		if is_instance_valid(name_label):
-			name_label.text = tracker.socket.get_requested_url()
+			name_label.text = str(tracker) if tracker is TubeMqttTracker else tracker.socket.get_requested_url()
 		
 		if is_instance_valid(state_indicator):
 			state_indicator.modulate = STATE_COLOR[tracker.state]

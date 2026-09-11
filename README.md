@@ -74,6 +74,13 @@ First, create a new `TubeContext` for your project `in Godot FileSystem inspecto
    - See [AndrooDev's TURN server](#androodev's-turn-server) or create your own
    - TURN provides a relay for traffic when peers are on restrictive connections like universities or VPN and normal STUN does not work.
 
+#### MQTT signaling (optional)
+
+Set `TubeContext.mqtt_broker_url` to a `ws://` or `wss://` broker endpoint like `wss://test.mosquitto.org:8081` to
+use MQTT alongside `trackers_urls`. Leave the tracker list empty for MQTT only,
+or leave the broker URL empty for existing behavior. MQTT uses Julian Todd's
+complete MIT-licensed [godot-mqtt](https://github.com/goatchurchprime/godot-mqtt).
+
 #### 2. Adding a `TubeClient` to Your Scene
 
 Next add a `TubeClient` to our game scene : `in Godot Scene Dock -> Add Child Node -> TubeClient`.

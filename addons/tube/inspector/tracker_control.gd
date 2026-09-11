@@ -55,6 +55,10 @@ func _process(_delta: float) -> void:
 	up_time_label.text = str(
 		tracker_item.tracker.up_time
 	).pad_decimals(3)
+	if tracker_item.tracker is TubeMqttTracker:
+		interval_time_left_label.text = "N/A"
+		interval_time_label.text = "N/A"
+		return
 	
 	interval_time_left_label.text = str(
 		tracker_item.tracker.interval_time_left

@@ -119,6 +119,9 @@ const _SERVER_PEER_ID: int = 1
 ## Maximum number of signaling attempts with a peer before failing.
 @export var peer_signaling_max_attempts: int = 3
 
+## Timeout (in seconds) before a tracker attempt is considered failed.
+@export var tracker_connect_timeout: float = TubeTracker.CONNECT_TIMEOUT
+
 ## Root node to which the multiplayer API should attach.
 ## If null, scene tree's root node will be used.
 @export var multiplayer_root_node: Node
@@ -163,6 +166,7 @@ var refuse_new_connections: bool = false:
 var _local_signaling_peer: TubeLocalSignalingPeer
 var _trackers: Array[TubeTracker] = []
 var _peers: Dictionary[int, TubePeer] = {}
+var _closing_trackers: Array[TubeTracker] = []
 
 
 func _raise_error(p_code: int, p_message: String):
@@ -294,8 +298,7 @@ func _initiate_create_session(p_emit_error := true) -> bool:
 	multiplayer_api.multiplayer_peer = multiplayer_peer
 
 	_initiate_local_signaling()
-	for url in context.trackers_urls:
-		_initiate_tracker(url)
+	_initiate_online_signaling()
 
 	if _is_local_signaling() and not _is_online_signaling():
 		state = State.SESSION_CREATED
@@ -359,9 +362,8 @@ func _initiate_join_session(p_session_id: String, p_emit_error := true) -> bool:
 		return false
 
 	_initiate_local_signaling()
-	for url in context.trackers_urls:
-		_initiate_tracker(url)
-	
+	_initiate_online_signaling()
+
 	return true
 
 
@@ -373,11 +375,14 @@ func _terminate_signaling():
 		_local_signaling_peer.close()
 		_local_signaling_peer = null
 	
-	for i_tracker in _trackers:
+	for i_tracker in _trackers.duplicate():
 		i_tracker.close(
 			context.get_info_hash(session_id),
 			context.get_peer_id_hash(peer_id)
 		)
+		_closing_trackers.append(i_tracker)
+	
+	_trackers.clear()
 
 
 func _terminate_session():
@@ -386,15 +391,7 @@ func _terminate_session():
 	
 	state = State.IDLE
 
-	if null != _local_signaling_peer:
-		_local_signaling_peer.close()
-		_local_signaling_peer = null
-	
-	for i_tracker in _trackers:
-		i_tracker.close(
-			context.get_info_hash(session_id),
-			context.get_peer_id_hash(peer_id)
-		)
+	_terminate_signaling()
 	
 	for i_peer: TubePeer in _peers.values():
 		i_peer.close() # will be clean collected
@@ -443,14 +440,8 @@ func _initiate_local_signaling() -> void:
 	)
 
 
-func _initiate_tracker(p_url: String) -> void:
-	var tracker := TubeTracker.new()
-	var error := tracker.connect_to_url(p_url)
-	_tracker_initiated.emit(tracker)
-	
-	if error:
-		return
-	
+func _initiate_tracker(p_url: String, tracker: TubeTracker = TubeTracker.new()) -> void:
+	tracker.connect_timeout = tracker_connect_timeout
 	_trackers.append(tracker)
 	tracker.connected.connect(
 		_on_tracker_connected.bind(tracker)
@@ -461,6 +452,23 @@ func _initiate_tracker(p_url: String) -> void:
 	tracker.interval_timeout.connect(
 		_on_tracker_interval_timeout.bind(tracker)
 	)
+	
+	_tracker_initiated.emit(tracker)
+	tracker.connect_to_url(p_url)
+
+
+func _initiate_online_signaling() -> void:
+	for url in context.trackers_urls:
+		_initiate_tracker(url)
+	
+	if not context.mqtt_broker_url.is_empty():
+		_initiate_tracker(
+			context.mqtt_broker_url,
+			TubeMqttTracker.new(
+				context.get_info_hash(session_id),
+				context.get_peer_id_hash(peer_id)
+			)
+		)
 
 
 func _on_tracker_connected(p_tracker: TubeTracker): 
@@ -483,48 +491,63 @@ func _on_tracker_connected(p_tracker: TubeTracker):
 	var server_peer := _peers[_SERVER_PEER_ID]
 	if server_peer.is_signaling_ready():
 		_send_signaling_data(server_peer, p_tracker)
+		server_peer.start_connection_attempt()
 
 
-func _all_trackers_disconnected(): # is_online_signaling false
-	if State.TRY_CREATING_SESSION == state:
-		_terminate_session()
-	elif State.CREATING_SESSION == state:
-		if _is_local_signaling():
-			_raise_error(
-				SessionError.ONLINE_SIGNALING_FAILED,
-				"Online signaling failed, cannot connect to any tracker"
-			)
-			return
-		
-		_raise_error(
-			SessionError.CREATE_SESSION_FAILED,
-			"Session creation failed, cannot connect to any tracker"
-		)
-		_terminate_session()
+func _all_trackers_disconnected():
+	var message := "Online signaling failed, no trackers connected"
 	
-	elif State.SESSION_CREATED == state:
+	if state in [State.CREATING_SESSION, State.TRY_CREATING_SESSION]:
+		var emit_error := state == State.CREATING_SESSION
+		
+		if _is_local_signaling():
+			state = State.SESSION_CREATED
+			_session_create_finished.emit(true)
+			session_created.emit()
+			
+			if emit_error:
+				_raise_error(
+					SessionError.ONLINE_SIGNALING_FAILED,
+					message
+				)
+		
+		else:
+			_terminate_session()
+			
+			if emit_error:
+				_raise_error(
+					SessionError.CREATE_SESSION_FAILED,
+					message
+				)
+	
+	elif state == State.SESSION_CREATED:
 		_raise_error(
 			SessionError.ONLINE_SIGNALING_FAILED,
-			"Signaling failed, lost all trackers connections"
+			message
 		)
 		
 		if not _is_local_signaling():
 			_raise_error(
-				SessionError.ONLINE_SIGNALING_FAILED,
-				"Signaling failed, lost all trackers connections"
+				SessionError.SIGNALING_FAILED,
+				message
 			)
-		
 	
-	elif State.JOINING_SESSION == state or State.TRY_JOINING_SESSION == state:
-		if _peers.has(_SERVER_PEER_ID):
-			var peer = _peers[_SERVER_PEER_ID]
-			if peer.remote_session_description.is_empty():
-				if State.JOINING_SESSION == state:
-					_raise_error(
-						SessionError.JOIN_SESSION_FAILED,
-						"Joining session failed, cannot connect to any tracker"
-					)
-				_terminate_session()
+	elif state in [State.JOINING_SESSION, State.TRY_JOINING_SESSION]:
+		var peer: TubePeer = _peers.get(_SERVER_PEER_ID)
+		
+		if _is_local_signaling() or (peer != null and not peer.remote_session_description.is_empty()):
+			if peer != null and peer.is_signaling_ready():
+				_on_peer_signaling_readied(peer)
+		
+		else:
+			var emit_error := state == State.JOINING_SESSION
+			_terminate_session()
+			
+			if emit_error:
+				_raise_error(
+					SessionError.JOIN_SESSION_FAILED,
+					message
+				)
 
 
 func _handle_local_signaling_data(p_data: Dictionary, p_address: String):
@@ -760,12 +783,16 @@ func _clean_peer(p_peer: TubePeer):
 
 func _on_peer_signaling_readied(p_peer: TubePeer):
 	_send_signaling_data(p_peer)
+	
+	if not is_server and not _is_local_signaling() and not _trackers.is_empty():
+		if not _trackers.any(func(tracker: TubeTracker): return tracker.is_open()):
+			return
+	
 	p_peer.start_connection_attempt()
 
 
 func _on_peer_signaling_timeout(p_peer: TubePeer):
-	_send_signaling_data(p_peer)
-	p_peer.start_connection_attempt()
+	_on_peer_signaling_readied(p_peer)
 
 
 func _on_peer_connected(p_peer: TubePeer):
@@ -830,20 +857,21 @@ func _on_peer_closed(p_peer: TubePeer):
 
 func _process(delta):
 
+	for tracker in _closing_trackers.duplicate():
+		tracker._process(delta)
+		if tracker.is_close():
+			_closing_trackers.erase(tracker)
+	
 	if _local_signaling_peer:
 		_local_signaling_peer._process(delta)
 	
 	var tracker_closed := false
-	var updated_trackers: Array[TubeTracker] = []
-	for i_tracker in _trackers:
+	for i_tracker in _trackers.duplicate():
 		i_tracker._process(delta)
-		if i_tracker.is_close():
+		if _trackers.has(i_tracker) and i_tracker.is_close():
 			tracker_closed = true
-			continue
-		
-		updated_trackers.append(i_tracker)
+			_trackers.erase(i_tracker)
 	
-	_trackers = updated_trackers
 	if tracker_closed and not _is_online_signaling():
 		_all_trackers_disconnected()
 	

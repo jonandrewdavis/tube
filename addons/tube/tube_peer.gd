@@ -95,6 +95,7 @@ var up_time: float = 0.0
 var local_address: String
 var local_session_description := {} 
 var remote_session_description := {}
+var _remote_ice_candidates: Array[Array] = []
 var ice_candidates: Array[Dictionary] = []
 var has_joined_session := false # set by client
 
@@ -231,6 +232,8 @@ func _on_ice_candidate_created(p_media: String, p_index: int, p_sdp: String):
 
 
 func _set_remote_description(p_type: String, p_sdp: String) -> Error:
+	if remote_session_description == {"type": p_type, "sdp": p_sdp}:
+		return OK
 	var error := connection.set_remote_description(p_type, p_sdp)
 	if error:
 		raise_warning(
@@ -248,6 +251,9 @@ func _set_remote_description(p_type: String, p_sdp: String) -> Error:
 
 
 func _add_ice_candidate(media: String, index: int, name: String) -> Error:
+	var candidate := [media, index, name]
+	if _remote_ice_candidates.has(candidate):
+		return OK
 	var error = connection.add_ice_candidate(
 		media,
 		index,
@@ -261,6 +267,7 @@ func _add_ice_candidate(media: String, index: int, name: String) -> Error:
 		}))
 		return error
 	
+	_remote_ice_candidates.append(candidate)
 	ice_candidate_added.emit({
 		"media": media,
 		"index": index,
