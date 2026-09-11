@@ -193,7 +193,7 @@ func _process(delta: float) -> void:
 			_mqtt.disconnect_from_server()
 		socket.poll()
 		_close_elapsed += delta
-		if socket.get_ready_state() == WebSocketPeer.STATE_CLOSED or _close_elapsed >= 1.0:
+		if socket.get_ready_state() == WebSocketPeer.STATE_CLOSED or _close_elapsed >= CLOSE_TIMEOUT:
 			state = WebSocketPeer.STATE_CLOSED
 			state_changed.emit()
 			disconnected.emit()

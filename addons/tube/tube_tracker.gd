@@ -3,6 +3,7 @@ class_name TubeTracker extends RefCounted
 
 const MAX_INTERVAL := 120.0 #sec
 const CONNECT_TIMEOUT := 10.0 #sec
+const CLOSE_TIMEOUT := 1.0 #sec
 signal failed
 signal connected
 signal disconnected
@@ -29,6 +30,7 @@ var state := socket.get_ready_state()
 
 var connect_timeout: float = CONNECT_TIMEOUT #sec
 var connecting_time: float = 0.0 #sec
+var closing_time: float = 0.0 #sec
 var up_time: float = 0.0 #sec
 var interval_time: float = 0.0 #sec
 var interval_time_left: float = -1.0
@@ -69,7 +71,7 @@ func is_open() -> bool:
 
 
 func is_close() -> bool:
-	return WebSocketPeer.STATE_CLOSED == socket.get_ready_state()
+	return WebSocketPeer.STATE_CLOSED == socket.get_ready_state() or closing_time >= CLOSE_TIMEOUT
 
 
 func close(p_info_hash: String, p_peer_id_hash: String):
@@ -353,7 +355,9 @@ func _process(delta: float):
 
 	elif WebSocketPeer.STATE_CLOSING == state:
 		# Keep polling to achieve proper close.
-		pass
+		closing_time += delta
+		if closing_time >= CLOSE_TIMEOUT:
+			disconnected.emit()
 
 	elif WebSocketPeer.STATE_CLOSED == state:
 		var code = socket.get_close_code()
