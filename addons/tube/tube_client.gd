@@ -204,6 +204,7 @@ func create_session() -> void:
 ## This method is a coroutine and requires the use of the [code]await[/code] keyword to get the returned value.
 ## Returns [code]true[/code] if successful, or [code]false[/code] if failed.
 ## Emits [signal session_created] if successful, but will [b]not[/b] emit [signal error_raised] if failed.
+## See [method TubeClient.create_session].
 func try_create_session() -> bool:
 	if not _initiate_create_session(false):
 		return false
